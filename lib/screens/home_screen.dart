@@ -55,13 +55,18 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _openMapScreen(RouteWay route) {
-    Navigator.push(
+  Future<void> _openMapScreen(RouteWay route) async {
+    await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => MapScreen(selectedRoute: route),
       ),
     );
+
+    // После возврата с экрана карты обновляем избранное/список маршрутов,
+    // т.к. пользователь мог изменить избранное на карте.
+    if (!mounted) return;
+    _loadData();
   }
 
   Future<void> _toggleFavorite(RouteWay route) async {
@@ -164,7 +169,7 @@ class _HomeScreenState extends State<HomeScreen> {
         border: OutlineInputBorder(),
         prefixIcon: Icon(Icons.directions_bus),
       ),
-      value: _selectedRoute,
+      initialValue: _selectedRoute,
       items: _buildDropdownItems(),
       onChanged: (RouteWay? route) {
         if (route != null) {

@@ -33,7 +33,8 @@ class _MapScreenState extends State<MapScreen> {
   String? _selectedStopName;
   VehicleMarker? _selectedVehicle;
 
-  final List<Marker> _markers = [];
+  final List<Marker> _stopMarkers = [];
+  final List<Marker> _vehicleMarkersLayer = [];
   final List<Polyline> _polylines = [];
 
   @override
@@ -69,7 +70,8 @@ class _MapScreenState extends State<MapScreen> {
       _isLoading = true;
       _selectedStopName = null;
       _selectedVehicle = null;
-      _markers.clear();
+      _stopMarkers.clear();
+      _vehicleMarkersLayer.clear();
       _polylines.clear();
     });
 
@@ -85,7 +87,7 @@ class _MapScreenState extends State<MapScreen> {
         _isLoading = false;
       });
       
-      _updateMapObjects();
+      _updateMapObjects(moveCameraToRoute: true);
     } catch (e) {
       setState(() {
         _isLoading = false;
@@ -98,8 +100,40 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  void _updateMapObjects() {
-    _markers.clear();
+  Future<void> _refreshVehicleMarkers() async {
+    if (_currentRoute == null) return;
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      final routeUrl = _currentRoute!.apiUrl;
+      final markers = await _apiService.getVehicleMarkers(routeUrl);
+
+      setState(() {
+        _vehicleMarkers = markers;
+        _isLoading = false;
+      });
+
+      _updateVehicleMarkersLayer();
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Ошибка обновления транспорта: $e')),
+        );
+      }
+    }
+  }
+
+  String _vehicleKey(VehicleMarker v) =>
+      '${v.idTypetr}|${v.marsh}|${v.graph}|${v.direction}|${v.segmentOrder}';
+
+  void _updateMapObjects({required bool moveCameraToRoute}) {
+    _stopMarkers.clear();
     _polylines.clear();
 
     // Линия маршрута
@@ -121,7 +155,7 @@ class _MapScreenState extends State<MapScreen> {
         final p = _routePath!.points[i];
         if (p.isStop && (p.name?.isNotEmpty ?? false)) {
           final stopName = p.name!;
-          _markers.add(
+          _stopMarkers.add(
             Marker(
               point: LatLng(p.lat, p.lng),
               width: 32,
@@ -158,11 +192,28 @@ class _MapScreenState extends State<MapScreen> {
         }
       }
 
-      _moveCameraToCenter(_routePath!.points);
+      if (moveCameraToRoute) {
+        _moveCameraToCenter(_routePath!.points);
+      }
     }
+
+    _updateVehicleMarkersLayer();
+
+    setState(() {});
+  }
+
+  void _updateVehicleMarkersLayer() {
+    _vehicleMarkersLayer.clear();
+
+    final selectedKey =
+        _selectedVehicle == null ? null : _vehicleKey(_selectedVehicle!);
+    VehicleMarker? refreshedSelected;
 
     // Маркеры транспорта
     for (final marker in _vehicleMarkers) {
+      if (selectedKey != null && _vehicleKey(marker) == selectedKey) {
+        refreshedSelected = marker;
+      }
       // Коррекция поворота стрелки:
       // ((-apiAz + 85) % 360 + 360) % 360
       final int apiAz = marker.azimuth;
@@ -170,7 +221,7 @@ class _MapScreenState extends State<MapScreen> {
           (((-apiAz + 85) % 360) + 360) % 360; // в градусах, 0–359
       final double angleRad = correctedAz * math.pi / 180.0;
 
-      _markers.add(
+      _vehicleMarkersLayer.add(
         Marker(
           point: LatLng(marker.lat, marker.lng),
           width: 32,
@@ -195,7 +246,15 @@ class _MapScreenState extends State<MapScreen> {
       );
     }
 
-    setState(() {});
+    if (_selectedVehicle != null) {
+      setState(() {
+        _selectedVehicle = refreshedSelected;
+        if (refreshedSelected == null) {
+          // Выбранный транспорт пропал из онлайна
+          _selectedVehicle = null;
+        }
+      });
+    }
   }
 
   void _moveCameraToCenter(List<RoutePathPoint> points) {
@@ -244,7 +303,7 @@ class _MapScreenState extends State<MapScreen> {
           IconButton(
             tooltip: 'Обновить транспорт',
             icon: const Icon(Icons.refresh),
-            onPressed: _isLoading ? null : _loadRouteData,
+            onPressed: _isLoading ? null : _refreshVehicleMarkers,
           ),
           if (_currentRoute != null)
             FutureBuilder<bool>(
@@ -292,7 +351,7 @@ class _MapScreenState extends State<MapScreen> {
                     zoom: 12,
                     minZoom: 5,
                     maxZoom: 18,
-                    onTap: (_, __) {
+                    onTap: (_, _) {
                       setState(() {
                         _selectedStopName = null;
                         _selectedVehicle = null;
@@ -311,7 +370,10 @@ class _MapScreenState extends State<MapScreen> {
                       polylines: _polylines,
                     ),
                     MarkerLayer(
-                      markers: _markers,
+                      markers: [
+                        ..._stopMarkers,
+                        ..._vehicleMarkersLayer,
+                      ],
                     ),
                   ],
                 ),
@@ -357,7 +419,7 @@ class _MapScreenState extends State<MapScreen> {
             border: OutlineInputBorder(),
             prefixIcon: Icon(Icons.directions_bus),
           ),
-          value: _currentRoute,
+          initialValue: _currentRoute,
           items: _buildDropdownItems(),
           onChanged: (RouteWay? route) {
             if (route != null) {
